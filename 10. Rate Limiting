@@ -1,0 +1,100 @@
+Паттерн Rate Limiting (ограничение частоты запросов)
+Рассмотрим Token Bucket — популярный алгоритм для контроля частоты запросов, реализуется следующим образом:
+
+Корзина токенов — это структура, в которой хранится определённое количество токенов (например, 10).
+Каждый запрос забирает один токен из корзины.
+Если токены закончились, запрос отклоняется.
+Токены пополняются с заданной скоростью (например, 1 токен в секунду) до максимального объёма корзины.
+Пример реализации
+package main
+import (
+    "sync"
+    "time"
+    "fmt"
+)
+
+type TokenBucket struct {
+    tokens         float64
+    maxTokens      float64
+    refillRate     float64 // токенов в секунду
+    lastRefillTime time.Time
+    mutex          sync.Mutex
+}
+
+func NewTokenBucket(maxTokens, refillRate float64) *TokenBucket {
+    return &TokenBucket{
+        tokens:         maxTokens,
+        maxTokens:      maxTokens,
+        refillRate:     refillRate,
+        lastRefillTime: time.Now(),
+    }
+}
+
+func (tb *TokenBucket) AllowRequest() bool {
+    tb.mutex.Lock()
+    defer tb.mutex.Unlock()
+
+    now := time.Now()
+    elapsed := now.Sub(tb.lastRefillTime).Seconds()
+    tb.tokens += elapsed * tb.refillRate
+    if tb.tokens > tb.maxTokens {
+        tb.tokens = tb.maxTokens
+    }
+    tb.lastRefillTime = now
+
+    if tb.tokens >= 1 {
+        tb.tokens -= 1
+        return true
+    }
+    return false
+}
+
+func main() {
+    tb := NewTokenBucket(5, 1) // максимум 5 токенов, пополнение 1 токен/сек
+    for i := 1; i <= 10; i++ {
+        allowed := tb.AllowRequest()
+        fmt.Printf("Запрос %d: %v\n", i, allowed)
+        time.Sleep(500 * time.Millisecond)
+    }
+}
+
+                  
+В этом примере:
+
+Корзина вмещает максимум 5 токенов.
+Пополнение — 1 токен в секунду.
+10 запросов отправляются с интервалом 0,5 секунды.
+Как только токены заканчиваются, новые запросы будут отклоняться, пока корзина не пополнится.
+Использование стандартной библиотеки
+В Go есть готовый пакет golang.org/x/time/rate, реализующий этот паттерн:
+
+import "golang.org/x/time/rate"
+
+limiter := rate.NewLimiter(1, 5) // 1 запрос в секунду, максимум 5 в "порыве"
+if limiter.Allow() {
+    // обработать запрос
+}
+
+                  
+ 
+Это стандартный и надёжный способ реализовать rate limiting.
+
+Преимущества Token Bucket:
+
+Позволяет "накопить" burst (резкий всплеск) запросов до лимита корзины.
+Гибкая настройка скорости и максимального количества запросов.
+Недостатки:
+
+Требует синхронизации при доступе из нескольких горутин.
+
+Этот подход широко используется для ограничения частоты запросов к API, сервисам или отдельным пользователям.
+
+Когда использовать?
+✅ API-ограничения (REST, gRPC).
+✅ Защита от DDoS / Brute-Force.
+✅ Ограничение внешних вызовов (чтобы не перегружать сервисы).
+
+Альтернативные алгоритмы
+Fixed Window (фиксированное окно).
+Sliding Window (скользящее окно).
+Leaky Bucket (дырявое ведро).
