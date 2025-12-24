@@ -1,0 +1,139 @@
+Heartbeats
+Heartbeats (или "пульсации") — это механизм контроля работоспособности горутин, позволяющий убедиться, что они выполняют работу и не зависли. Принцип особенно полезен в долгоживущих горутинах, фоновых задачах и распределённых системах.
+
+1. Основная идея
+Горутина периодически отправляет сигнал ("пульс"), подтверждающий её активность. Если сигналы прекращаются — значит, что-то пошло не так.
+
+2. Варианты реализации
+a) Heartbeat через канал
+
+Горутина отправляет сигнал в канал через фиксированные интервалы:
+
+func worker(heartbeat chan<- struct{}, done <-chan struct{}) {
+    defer close(heartbeat)
+    ticker := time.NewTicker(500 * time.Millisecond)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-done:
+            return
+        case <-ticker.C:
+            heartbeat <- struct{}{} // Отправляем пульс
+        case <-time.After(2 * time.Second):
+            // Долгая операция (может быть обёрнута в отдельный select)
+            log.Println("working...")
+        }
+    }
+}
+
+                  
+Как использовать:
+
+done := make(chan struct{})
+heartbeat := make(chan struct{})
+go worker(heartbeat, done)
+
+// Проверка "пульса" горутины
+select {
+case <-heartbeat:
+    log.Println("Горутина жива")
+case <-time.After(1 * time.Second):
+    log.Fatal("Горутина не отвечает!")
+}
+
+                  
+b) Heartbeat с результатами
+
+Горутина отправляет не только сигнал, но и данные:
+
+func worker(results chan<- int, heartbeat chan<- struct{}, done <-chan struct{}) {
+    defer close(results)
+    defer close(heartbeat)
+
+    for i := 0; ; i++ {
+        select {
+        case <-done:
+            return
+        case results <- i: // Отправляем результат
+        case heartbeat <- struct{}{}: // Параллельно отправляем пульс
+        }
+    }
+}
+
+                  
+c) Heartbeat для группы горутин
+
+Контроль нескольких воркеров через единый канал:
+
+func worker(id int, heartbeat chan<- int) {
+    for {
+        time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+        heartbeat <- id // "Я живой!"
+    }
+}
+
+func monitor(heartbeat <-chan int, timeout time.Duration) {
+    lastPulse := time.Now()
+    for {
+        select {
+        case id := <-heartbeat:
+            lastPulse = time.Now()
+            log.Printf("Воркер %d жив", id)
+        case <-time.After(timeout):
+            log.Fatal("Никто не отвечает!")
+        }
+    }
+}
+
+                  
+3. Где применяется?
+Распределённые системы
+Проверка активности нод в кластере (например, в Kubernetes).
+
+Фоновые задачи
+Мониторинг горутин, которые обрабатывают очереди (RabbitMQ, Kafka).
+
+Тестирование
+Убедиться, что горутина не заблокировалась во время тестов.
+
+Graceful Shutdown
+Остановка горутин только после подтверждения их завершения.
+
+4. Плюсы и минусы
+Плюсы	Минусы
+Контроль зависших горутин	Дополнительные каналы
+Простота реализации	Незначительные накладные расходы
+Универсальность (подходит для любых задач)	Требует точной настройки таймаутов
+5. Пример из реального мира
+Сценарий: Обработка задач из очереди с контролем "зависаний".
+
+func processTask(task Task, heartbeat chan<- struct{}) error {
+    heartbeat <- struct{}{} // Пульс перед началом
+    err := task.Do()
+    heartbeat <- struct{}{} // Пульс после завершения
+    return err
+}
+
+func main() {
+    heartbeat := make(chan struct{})
+    go func() {
+        for {
+            select {
+            case <-heartbeat:
+                log.Println("Воркер активен")
+            case <-time.After(5 * time.Second):
+                log.Fatal("Воркер умер!")
+            }
+        }
+    }()
+
+    task := NewTask()
+    go processTask(task, heartbeat)
+}
+
+                  
+6. Альтернативы
+Context: Для отмены операций по таймауту.
+Health Checks: HTTP-эндпоинты /health в микросервисах.
+Heartbeats — это простой и эффективный способ убедиться, что ваши горутины не "умерли" молча. Реализуется через каналы и таймеры, требует аккуратной настройки интервалов.
